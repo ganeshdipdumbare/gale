@@ -1,0 +1,10 @@
+/bin/
+/.benchmark-gale/
+/benchmark-results.md
+*.db
+*.db-*
+.DS_Store
+.idea/
+.vscode/
+*.test
+coverage.out
