@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ganeshdipdumbare/gale/internal/download"
@@ -129,5 +130,64 @@ func TestQuittingShowsCancelled(t *testing.T) {
 	}
 	if !strings.Contains(mm.View(), "Cancelled") {
 		t.Errorf("expected cancelled message, got:\n%s", mm.View())
+	}
+}
+
+// TestBridgeDrainsAllEventsBeforeSignalingDone is a regression test for a
+// race where FinishedMsg could be processed before the last buffered
+// EventMsgs, showing a stale/short completed count on a successful install.
+// It runs a real tea.Program (headless: no input/renderer) and verifies
+// that by the time Bridge's returned channel closes, every event sent
+// through it has already been applied to the model — so callers who wait on
+// that channel before sending FinishedMsg can't observe a partial state.
+func TestBridgeDrainsAllEventsBeforeSignalingDone(t *testing.T) {
+	names := []string{"a", "b", "c"}
+	p := tea.NewProgram(NewModel(names),
+		tea.WithInput(nil),
+		tea.WithoutRenderer(),
+		tea.WithoutSignalHandler(),
+		tea.WithoutSignals(),
+	)
+
+	events := make(chan download.Event, len(names)*2)
+	for _, n := range names {
+		events <- download.Event{ID: n, State: download.StateDownloading}
+		events <- download.Event{ID: n, State: download.StateDone}
+	}
+	close(events)
+
+	drained := Bridge(p, events)
+
+	runDone := make(chan tea.Model, 1)
+	go func() {
+		final, _ := p.Run()
+		runDone <- final
+	}()
+
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Bridge to drain all events")
+	}
+
+	// Only now is it safe to send a terminal message: every event above is
+	// guaranteed to have already been applied to the running model.
+	p.Send(FinishedMsg{})
+
+	var final tea.Model
+	select {
+	case final = <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the program to quit")
+	}
+
+	fm, ok := final.(Model)
+	if !ok {
+		t.Fatalf("unexpected final model type %T", final)
+	}
+	done, active, queued, failed := fm.counts()
+	if done != len(names) || active != 0 || queued != 0 || failed != 0 {
+		t.Errorf("expected all %d packages done with none active/queued when FinishedMsg follows drain, got done=%d active=%d queued=%d failed=%d",
+			len(names), done, active, queued, failed)
 	}
 }

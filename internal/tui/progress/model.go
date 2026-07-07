@@ -405,16 +405,25 @@ func min(a, b int) int {
 }
 
 // Bridge forwards download events from the installer into the Bubble Tea
-// program. It never blocks the installer indefinitely: if the TUI can't
-// keep up, sends still happen (Program.Send queues internally), but the
-// goroutine exits cleanly once the channel is closed so no installer
-// worker is ever leaked waiting on a dead UI.
-func Bridge(p *tea.Program, events <-chan download.Event) {
+// program. It returns a channel that is closed once every buffered event
+// has been forwarded and processed and the events channel has been closed.
+//
+// Callers that need to send a terminal message afterwards (e.g.
+// FinishedMsg) must wait on this channel first: p.Send blocks until the
+// program's event loop has received the message, so by the time the
+// returned channel closes every prior EventMsg is guaranteed to have been
+// applied. Sending FinishedMsg without this synchronization races with the
+// drain and can let FinishedMsg (which quits the program) be processed
+// before the final StateDone events, showing a stale/short completed count.
+func Bridge(p *tea.Program, events <-chan download.Event) <-chan struct{} {
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		for ev := range events {
 			p.Send(EventMsg(ev))
 		}
 	}()
+	return drained
 }
 
 func (m Model) Err() error { return m.err }
