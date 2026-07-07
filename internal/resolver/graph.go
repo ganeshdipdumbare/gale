@@ -168,35 +168,71 @@ func (g *Graph) Levels() [][]string {
 	return levels
 }
 
-// TreeLines renders the DAG as unicode tree lines for display.
+// TreeLines renders the DAG as unicode tree lines for display, rooted at a
+// single package.
 func (g *Graph) TreeLines(root string) []string {
-	key := strings.ToLower(root)
-	node, ok := g.Nodes[key]
-	if !ok {
-		return []string{root}
-	}
+	return g.MultiTreeLines([]string{root})
+}
+
+// MultiTreeLines renders the DAG as unicode tree lines for one or more
+// requested roots (e.g. `gale install foo bar`). Each root gets its own
+// top-level tree. Shared dependencies that were already fully expanded
+// under an earlier branch are shown once and marked "(already shown above)"
+// to keep large/diamond-shaped graphs readable and bounded in size.
+func (g *Graph) MultiTreeLines(roots []string) []string {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("%s %s", node.Name, node.Package.Version))
-	var walk func(name, prefix string, last bool)
-	walk = func(name, prefix string, last bool) {
+	shown := make(map[string]bool)
+
+	var walk func(name, prefix string)
+	walk = func(name, prefix string) {
 		n := g.Nodes[strings.ToLower(name)]
 		deps := n.Dependencies
-		for i, dep := range deps {
-			dk := strings.ToLower(dep)
-			dn, ok := g.Nodes[dk]
-			if !ok {
+		// Only recurse into dependencies that actually made it into the
+		// resolved graph (virtual/no-bottle deps are filtered upstream).
+		var resolved []Node
+		for _, dep := range deps {
+			if dn, ok := g.Nodes[strings.ToLower(dep)]; ok {
+				resolved = append(resolved, dn)
+			}
+		}
+		for i, dn := range resolved {
+			branch, childPrefix := "├── ", prefix+"│   "
+			if i == len(resolved)-1 {
+				branch, childPrefix = "└── ", prefix+"    "
+			}
+			key := strings.ToLower(dn.Name)
+			label := dn.Name + " " + dn.Package.Version
+			if shown[key] {
+				lines = append(lines, prefix+branch+label+" (already shown above)")
 				continue
 			}
-			branch := "├── "
-			childPrefix := prefix + "│   "
-			if i == len(deps)-1 {
-				branch = "└── "
-				childPrefix = prefix + "    "
-			}
-			lines = append(lines, prefix+branch+dn.Name+" "+dn.Package.Version)
-			walk(dn.Name, childPrefix, i == len(deps)-1)
+			shown[key] = true
+			lines = append(lines, prefix+branch+label)
+			walk(dn.Name, childPrefix)
 		}
 	}
-	walk(node.Name, "", true)
+
+	seenRoot := make(map[string]bool)
+	for _, root := range roots {
+		key := strings.ToLower(root)
+		if seenRoot[key] {
+			continue
+		}
+		seenRoot[key] = true
+		node, ok := g.Nodes[key]
+		if !ok {
+			lines = append(lines, root+" (no bottle for this platform)")
+			continue
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, node.Name+" "+node.Package.Version)
+		shown[key] = true
+		walk(node.Name, "")
+	}
+	if len(lines) == 0 {
+		return []string{"(nothing to install)"}
+	}
 	return lines
 }

@@ -74,10 +74,7 @@ func (d *Downloader) Download(ctx context.Context, spec DownloadSpec, progress c
 			return
 		}
 		ev.ID = spec.ID
-		select {
-		case progress <- ev:
-		default:
-		}
+		progress <- ev
 	}
 
 	emit(Event{State: StateDownloading})
@@ -487,10 +484,7 @@ func (d *Downloader) downloadSingle(ctx context.Context, spec DownloadSpec, urls
 			return
 		}
 		ev.ID = spec.ID
-		select {
-		case progress <- ev:
-		default:
-		}
+		progress <- ev
 	}
 
 	var lastErr error

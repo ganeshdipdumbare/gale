@@ -25,19 +25,29 @@ type Installer struct {
 	OnState    func(pkg string, state download.State)
 }
 
+func (ins *Installer) emit(ev download.Event) {
+	if ins.Progress == nil {
+		return
+	}
+	ins.Progress <- ev
+}
+
+func (ins *Installer) setState(pkg string, state download.State) {
+	if ins.OnState != nil {
+		ins.OnState(pkg, state)
+	}
+	ins.emit(download.Event{ID: pkg, State: state})
+}
+
 // InstallNode installs a single resolved node.
 func (ins *Installer) InstallNode(ctx context.Context, node Node) error {
-	if ins.OnState != nil {
-		ins.OnState(node.Name, download.StateQueued)
-	}
+	ins.setState(node.Name, download.StateQueued)
 	installed, _, err := ins.DB.IsInstalled(node.Name)
 	if err != nil {
 		return err
 	}
 	if installed {
-		if ins.OnState != nil {
-			ins.OnState(node.Name, download.StateDone)
-		}
+		ins.setState(node.Name, download.StateDone)
 		return nil
 	}
 
@@ -60,20 +70,14 @@ func (ins *Installer) InstallNode(ctx context.Context, node Node) error {
 			FileSHA256: pkg.Bottle.SHA256,
 			MaxWorkers: ins.MaxJobs,
 		}
-		if ins.OnState != nil {
-			ins.OnState(node.Name, download.StateDownloading)
-		}
+		ins.setState(node.Name, download.StateDownloading)
 		if err := ins.Downloader.Download(ctx, spec, ins.Progress); err != nil {
-			if ins.OnState != nil {
-				ins.OnState(node.Name, download.StateFailed)
-			}
+			ins.setState(node.Name, download.StateFailed)
 			return fmt.Errorf("%s: download: %w", node.Name, err)
 		}
 	}
 
-	if ins.OnState != nil {
-		ins.OnState(node.Name, download.StateInstalling)
-	}
+	ins.setState(node.Name, download.StateInstalling)
 	storePath, err := ins.Store.IngestBottle(dest, pkg.Bottle.SHA256)
 	if err != nil {
 		return fmt.Errorf("%s: ingest: %w", node.Name, err)
@@ -99,9 +103,7 @@ func (ins *Installer) InstallNode(ctx context.Context, node Node) error {
 		return err
 	}
 	_ = ins.DB.RecordFile(pkg.Bottle.SHA256, storePath, pkg.Bottle.Size)
-	if ins.OnState != nil {
-		ins.OnState(node.Name, download.StateDone)
-	}
+	ins.setState(node.Name, download.StateDone)
 	return nil
 }
 
